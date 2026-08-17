@@ -72,7 +72,7 @@ export const useTranslationStore = defineStore('translation', {
             }
           )
         })
-        if (this.status === 'error') return
+        if ((this.status as TaskStatus) === 'error') return
       }
 
       this.status = 'success'
