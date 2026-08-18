@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import InputPanel from '@/components/InputPanel.vue'
 import OriginalPanel from '@/components/OriginalPanel.vue'
 import TranslationPanel from '@/components/TranslationPanel.vue'
+import HistoryPanel from '@/components/HistoryPanel.vue'
 import { useTranslationStore } from '@/stores/translationStore'
 import { useSegmentScrollSync } from '@/composables/useSegmentScrollSync'
 import { storeToRefs } from 'pinia'
@@ -63,6 +64,9 @@ const statusText = computed(() => {
       <button class="sync-toggle" type="button" @click="store.toggleSync">
         同步滚动：{{ syncScrollEnabled ? '开' : '关' }}
       </button>
+      <button class="history-toggle" type="button" @click="store.toggleHistoryPanel">
+        历史记录
+      </button>
     </header>
 
     <InputPanel :is-busy="isBusy" @submit="handleSubmit" />
@@ -82,6 +86,8 @@ const statusText = computed(() => {
       <OriginalPanel ref="originalPanelRef" :segments="segments" />
       <TranslationPanel ref="translationPanelRef" :segments="segments" :is-busy="isBusy" />
     </main>
+
+    <HistoryPanel />
   </div>
 </template>
 
@@ -125,6 +131,13 @@ const statusText = computed(() => {
 }
 .status.cancelled {
   color: #e6a23c;
+}
+.history-toggle {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
 }
 .dual-panel {
   flex: 1;
