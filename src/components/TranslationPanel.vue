@@ -40,10 +40,13 @@ function handleRetry(id: number) {
             </button>
           </div>
         </template>
-        <p v-else class="segment-text">
+        <p v-else-if="seg.translated || isBusy || seg.retrying" class="segment-text">
           {{ seg.translated }}
           <span v-if="(isBusy || seg.retrying) && !seg.translated" class="typing-dot">▍</span>
         </p>
+        <!-- 取消翻译后，还没轮到的段落既没译文也没报错，容易被误以为是"卡住了"，
+             给个明确提示，说明这是"还没翻译"而不是异常 -->
+        <p v-else class="segment-pending">尚未翻译</p>
       </div>
     </div>
   </div>
@@ -111,5 +114,10 @@ function handleRetry(id: number) {
 .retry-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.segment-pending {
+  margin: 0;
+  color: #c0c4cc;
+  font-style: italic;
 }
 </style>

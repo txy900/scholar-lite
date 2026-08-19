@@ -6,10 +6,13 @@ import TranslationPanel from '@/components/TranslationPanel.vue'
 import HistoryPanel from '@/components/HistoryPanel.vue'
 import { useTranslationStore } from '@/stores/translationStore'
 import { useSegmentScrollSync } from '@/composables/useSegmentScrollSync'
+import { useNetworkStatus } from '@/composables/useNetworkStatus'
 import { storeToRefs } from 'pinia'
 
 const store = useTranslationStore()
 const { segments, status, errorMessage, isBusy, syncScrollEnabled } = storeToRefs(store)
+
+const { isOnline } = useNetworkStatus()
 
 // 组件实例引用，用于拿到内部的滚动容器DOM
 const originalPanelRef = ref<InstanceType<typeof OriginalPanel> | null>(null)
@@ -55,6 +58,11 @@ const statusText = computed(() => {
 
 <template>
   <div class="app">
+    <!-- 网络状态提示条：离线时立刻反馈，不用等请求超时才发现异常 -->
+    <div v-if="!isOnline" class="offline-banner">
+      网络已断开，翻译请求可能会失败或卡住，请检查网络连接
+    </div>
+
     <header class="app-header">
       <div class="title">ScholarLite · 英文技术文档双语对照阅读</div>
       <div class="status" :class="status">{{ statusText }}</div>
@@ -145,6 +153,14 @@ const statusText = computed(() => {
   border: 1px solid #ddd;
   background: #fff;
   cursor: pointer;
+}
+.offline-banner {
+  background: #fdf6ec;
+  color: #e6a23c;
+  padding: 8px 16px;
+  font-size: 13px;
+  text-align: center;
+  border-bottom: 1px solid #f5dab1;
 }
 .dual-panel {
   flex: 1;

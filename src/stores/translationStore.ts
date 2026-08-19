@@ -21,7 +21,8 @@ function splitIntoSegments(rawText: string): Segment[] {
       id: idx,
       original,
       translated: '',
-      terms: annotateTerms(original)
+      terms: annotateTerms(original),
+      done: false
     }))
 }
 
@@ -53,6 +54,43 @@ export const useTranslationStore = defineStore('translation', {
     },
 
     /**
+     * 翻译单个段落的核心逻辑，被首次翻译（translateAll）和失败重试（retrySegment）
+     * 共用，避免同一套"调API+处理流式回调"的逻辑写两遍。
+     * 返回值：这一段是否翻译成功（没有 error）。
+     */
+    async runSingleSegment(seg: Segment): Promise<boolean> {
+      seg.error = undefined
+      seg.translated = ''
+      seg.done = false
+
+      if (!controller || controller.signal.aborted) {
+        controller = new AbortController()
+      }
+
+      await new Promise<void>((resolve) => {
+        streamTranslateSegment(
+          seg.original,
+          {
+            onDelta: (text) => {
+              seg.translated += text
+            },
+            onDone: () => {
+              seg.done = true
+              resolve()
+            },
+            onError: (err) => {
+              seg.error = err.message
+              resolve()
+            }
+          },
+          controller?.signal
+        )
+      })
+
+      return !seg.error
+    },
+
+    /**
      * 提交原文，按段落逐个发起流式翻译请求。
      * 没有一次性把整篇丢给模型，而是逐段调用，原因：
      *  1) 可以让「原文第N段」与「译文第N段」的对应关系始终清晰，不需要额外做对齐
@@ -69,132 +107,71 @@ export const useTranslationStore = defineStore('translation', {
       }
       this.segments = segments
       this.status = 'streaming'
-      controller = new AbortController()
 
-      for (let i = 0; i < segments.length; i++) {
-        const seg = segments[i]
-        await new Promise<void>((resolve) => {
-          streamTranslateSegment(
-            seg.original,
-            {
-              onDelta: (text) => {
-                const target = this.segments.find((s) => s.id === seg.id)
-                if (target) target.translated += text
-              },
-              onDone: () => resolve(),
-              onError: (err) => {
-                // 单段失败不再让整个任务中断——只标记这一段出错，
-                // 循环继续翻译剩下的段落，出错的段落之后可以单独重试
-                const target = this.segments.find((s) => s.id === seg.id)
-                if (target) target.error = err.message
-                resolve()
-              }
-            },
-            controller?.signal
-          )
-        })
+      for (let i = 0; i < this.segments.length; i++) {
+        const ok = await this.runSingleSegment(this.segments[i])
 
-        const current = this.status as TaskStatus
-        if (current === 'cancelled') return
+        if ((this.status as TaskStatus) === 'cancelled') return
 
         // 例外：如果连第一段都失败了，大概率是系统性问题（API Key配错、网络不通），
         // 逐段重试没有意义、只会浪费请求，直接判定为整体失败更合理
-        if (i === 0 && this.segments[0].error) {
+        if (i === 0 && !ok) {
           this.status = 'error'
-          this.errorMessage = this.segments[0].error
+          this.errorMessage = this.segments[0].error || '翻译失败'
           return
         }
       }
 
-      this.status = 'success'
-      await this.saveCurrentAsHistory()
+      this.finishIfAllDone()
     },
 
     /**
-     * 单段重试。得益于「段落级独立请求」这个架构，重试单段的实现成本很低——
-     * 本质上和首次翻译某一段是同一个函数调用。
+     * 单段重试：重试指定段落，成功后自动接着翻译后面「还没跑过」的段落——
+     * 这样即使是第一段失败导致后面整体没开始，重试也能把整篇接着补完，
+     * 而不是只修好这一段、后面依然一片空白。
      *
-     * 有个边界情况需要处理：如果失败的正是「第一段」，translateAll 会判定为系统性问题
-     * （比如API Key配错）提前整体退出，这种情况下这一段之后的段落根本没开始翻译过。
-     * 所以重试成功后，不能只停在这一段——还要接着把后面「从未尝试过」的段落也跑完，
-     * 这样才是真正的「断点续译」，而不是只修好孤立的一段、后面依然一片空白。
+     * 注意这和「取消翻译」是两回事：取消代表用户明确不想要这次翻译了，
+     * 不提供"继续"入口；重试针对的是"用户想要完整结果，只是某一段网络抖动失败了"
+     * 这个更明确的意图，所以只有重试才做续译。
      */
     async retrySegment(id: number) {
       const startIndex = this.segments.findIndex((s) => s.id === id)
       if (startIndex === -1) return
 
-      const seg = this.segments[startIndex]
-      seg.error = undefined
-      seg.translated = '' // 重试前先清空，否则 onDelta 的 += 会把新内容接在失败前的残留文字后面
-      seg.retrying = true
-
-      // 重试期间也要让 isBusy 为 true——否则用户可以在重试进行中同时点"开始翻译"
-      // 重新提交整篇，导致两路请求互相冲突（和最早修的"重复点击"是同一类问题）
       const statusBeforeRetry = this.status
-      this.status = 'streaming'
+      this.status = 'streaming' // 保证 isBusy 为 true，防止和"开始翻译"按钮冲突
 
-      if (!controller || controller.signal.aborted) {
-        controller = new AbortController()
+      for (let i = startIndex; i < this.segments.length; i++) {
+        const seg = this.segments[i]
+        if (seg.done) continue // 已经成功完成的段落跳过，不重复翻译
+
+        seg.retrying = true
+        const ok = await this.runSingleSegment(seg)
+        seg.retrying = false
+
+        if (!ok) {
+          this.status = statusBeforeRetry // 还是失败，恢复到重试前的状态，别让 isBusy 卡死
+          return
+        }
       }
 
-      await new Promise<void>((resolve) => {
-        streamTranslateSegment(
-          seg.original,
-          {
-            onDelta: (text) => {
-              seg.translated += text
-            },
-            onDone: () => {
-              seg.retrying = false
-              resolve()
-            },
-            onError: (err) => {
-              seg.error = err.message
-              seg.retrying = false
-              resolve()
-            }
-          },
-          controller?.signal
-        )
-      })
+      this.finishIfAllDone()
+    },
 
-      if (seg.error) {
-        this.status = statusBeforeRetry // 重试还是失败，恢复到重试前的状态，别让 isBusy 卡死
-        return
-      }
-
-      // 重试成功后，接着翻译后面「还没被尝试过」的段落（原文非空、还没有译文、也没有报错记录）
-      for (let i = startIndex + 1; i < this.segments.length; i++) {
-        const next = this.segments[i]
-        if (next.translated || next.error) continue // 已经跑过（成功或失败）的段落跳过
-
-        await new Promise<void>((resolve) => {
-          streamTranslateSegment(
-            next.original,
-            {
-              onDelta: (text) => {
-                next.translated += text
-              },
-              onDone: () => resolve(),
-              onError: (err) => {
-                next.error = err.message
-                resolve()
-              }
-            },
-            controller?.signal
-          )
-        })
-      }
-
-      // 所有段落都跑完了，如果没有任何一段还带着错误，就可以判定整体成功了，
-      // 补一次历史记录持久化——因为最初那次因为系统性错误提前退出时，是没机会存历史的
-      const stillHasError = this.segments.some((s) => s.error)
-      if (!stillHasError) {
+    /**
+     * 统一的收尾判断：所有段落都成功完成才算真正的整体成功，才存历史记录；
+     * 只要还有一段没完成，就不误报"成功"（之前的版本这里有个小bug：
+     * 哪怕中间有段落失败，最后也会无条件标记成功并存历史，现在改成必须
+     * 全部完成才算数，更准确）。
+     */
+    async finishIfAllDone() {
+      const allDone = this.segments.every((s) => s.done)
+      if (allDone) {
         this.status = 'success'
         this.errorMessage = ''
         await this.saveCurrentAsHistory()
       } else {
-        this.status = statusBeforeRetry // 还有段落没修好，恢复到重试前的状态，不误报成功
+        this.status = 'idle'
       }
     },
 
@@ -253,8 +230,9 @@ export const useTranslationStore = defineStore('translation', {
     },
 
     /**
-     * 取消进行中的翻译。中断当前段落的网络请求，已经翻译出来的段落保留展示，
-     * 不清空——用户能看到"翻译到哪儿被打断了"，而不是前功尽弃。
+     * 取消进行中的翻译。语义上等同于"我不要这次翻译了"，不是"暂停"——
+     * 不提供"继续"入口，已经翻译出来的段落保留展示（不清空），
+     * 让用户能看到翻译到哪儿被打断的，但要重新翻译的话需要重新点"开始翻译"。
      */
     cancelTranslation() {
       if (!this.isBusy) return
