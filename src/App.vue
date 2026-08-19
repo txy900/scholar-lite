@@ -76,8 +76,15 @@ const statusText = computed(() => {
       粘贴一段英文技术文档，点击"开始翻译"，或先点"填入示例"快速体验
     </div>
 
-    <!-- 报错状态：请求失败时给出可见的提示卡片，而不是只在 console 里报错 -->
-    <div v-else-if="status === 'error'" class="error-state">
+    <!--
+      全屏报错卡片：只在"完全没有任何段落数据"时展示，
+      比如空输入、或第一段就失败判定为系统性问题（API Key配错等）。
+      如果已经有部分段落翻译成功了（只是某一段失败），
+      不应该用全屏卡片盖住双栏——那样用户看不到已经翻译好的内容，
+      也够不到失败段落旁边的"重试"按钮。这种情况走下面的双栏视图，
+      失败的段落会在 TranslationPanel 里单独展示错误提示+重试按钮。
+    -->
+    <div v-else-if="status === 'error' && segments.length === 0" class="error-state">
       <div class="error-title">翻译失败</div>
       <div class="error-detail">{{ errorMessage || '请检查网络或 API Key 配置' }}</div>
     </div>

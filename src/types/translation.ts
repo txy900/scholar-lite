@@ -33,10 +33,12 @@ export interface TermAnnotation {
 }
 
 export interface Segment {
-  id: number                    // 段落序号，原文和译文的第 N 段一一对应
+  id: number                     // 段落序号，原文和译文的第 N 段一一对应
   original: string               // 该段原文
   translated: string             // 该段译文（流式输出时逐步填充）
   terms?: TermAnnotation[]       // 该段命中的术语（简化版：本地术语表匹配）
+  error?: string                 // 该段翻译失败时的错误信息，用于显示单段重试按钮
+  retrying?: boolean             // 该段是否正在重试中（区别于整体 isBusy，只影响这一段的UI）
 }
 
 export type TaskStatus = 'idle' | 'pending' | 'streaming' | 'success' | 'error' | 'cancelled'
