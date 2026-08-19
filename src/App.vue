@@ -7,6 +7,7 @@ import HistoryPanel from '@/components/HistoryPanel.vue'
 import { useTranslationStore } from '@/stores/translationStore'
 import { useSegmentScrollSync } from '@/composables/useSegmentScrollSync'
 import { useNetworkStatus } from '@/composables/useNetworkStatus'
+import { buildMarkdownContent, downloadMarkdown } from '@/utils/exportMarkdown'
 import { storeToRefs } from 'pinia'
 
 const store = useTranslationStore()
@@ -38,6 +39,20 @@ watch(
 
 function handleSubmit(text: string) {
   store.translateAll(text)
+}
+
+// 导出条件：至少要有段落内容——空状态下没什么可导出的
+const canExport = computed(() => segments.value.length > 0)
+
+function handleExport() {
+  if (!canExport.value) return
+  const content = buildMarkdownContent(segments.value)
+  const timestamp = new Date()
+    .toISOString()
+    .slice(0, 16)
+    .replace(/[-:]/g, '')
+    .replace('T', '-')
+  downloadMarkdown(content, `scholarlite-${timestamp}.md`)
 }
 
 const statusText = computed(() => {
@@ -74,6 +89,15 @@ const statusText = computed(() => {
       </button>
       <button class="history-toggle" type="button" @click="store.toggleHistoryPanel">
         历史记录
+      </button>
+      <button
+        v-if="canExport"
+        class="export-btn"
+        type="button"
+        :disabled="isBusy"
+        @click="handleExport"
+      >
+        导出Markdown
       </button>
     </header>
 
@@ -161,6 +185,18 @@ const statusText = computed(() => {
   font-size: 13px;
   text-align: center;
   border-bottom: 1px solid #f5dab1;
+}
+.export-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #67c23a;
+  background: #fff;
+  color: #67c23a;
+  cursor: pointer;
+}
+.export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .dual-panel {
   flex: 1;
